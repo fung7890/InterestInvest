@@ -7,9 +7,12 @@ from nltk.stem import WordNetLemmatizer
 from pprint import pprint
 from nltk.corpus import stopwords 
 from nltk.tokenize import word_tokenize 
-import nltk
+import nltk, csv
 from collections import Counter
-import pickle
+import pickle, json
+from scipy.stats import variation
+
+
 
 # enters 10-k page, still have to return actual document 
 def enter_10k_page(ticker):
@@ -47,11 +50,11 @@ def enter_10k(ticker):
 	return href
 
 def visible(element):
-    if element.parent.name in ['style', 'script', '[document]', 'head', 'title']:
-        return False
-    elif re.match('<!--.*-->', str(element)):
-        return False
-    return True
+	if element.parent.name in ['style', 'script', '[document]', 'head', 'title']:
+		return False
+	elif re.match('<!--.*-->', str(element)):
+		return False
+	return True
 
 def getBusinessDesc(ticker):
 	href = enter_10k(ticker)
@@ -81,16 +84,19 @@ def saveBusinessDesc(ticker):
 	f.write(getBusinessDesc(ticker))
 	f.close()
 
-def remove_stop_words(text):
+def remove_stop_words(text, financial_stop_words):
+	lemmatizer = WordNetLemmatizer() 
+
 	stop_words = set(stopwords.words('english')) 
 	word_tokens = word_tokenize(text) 
 
 	filtered_sentence = [] 
-  
+
 	for w in word_tokens: 
 		# remove punctuation and numbers 
-	    if w not in stop_words and w not in string.punctuation and w.isalpha(): 
-	        filtered_sentence.append(w) 
+		if w not in stop_words and w not in string.punctuation and w.isalpha():
+			if lemmatizer.lemmatize(w.lower()) not in financial_stop_words: 
+				filtered_sentence.append(w) 
 
 	return filtered_sentence
 
@@ -137,8 +143,12 @@ def update_stock_data_dict():
 	ret_dict = {}
 	error_count = 0
 	tickers = load_tickers('sp500.csv')
+
+	with open('financialStopWords.csv', 'r') as f:
+		reader = csv.reader(f)
+		financial_stop_words = list(reader)[0]
 	
-	for ticker in tickers:
+	for ticker in tickers[:5]:  ############# CHANGED TO UP TO 5 FOR NOW ################
 		txt = getBusinessDesc(ticker) # get business desc of ticker
 
 		if txt == None: # if business desc doesn't load 
@@ -146,19 +156,67 @@ def update_stock_data_dict():
 			print("ERROR ON: ", ticker)
 			continue
 
-		removed_stop_words = remove_stop_words(txt) # take out stop words from business desc
+		removed_stop_words = remove_stop_words(txt, financial_stop_words) # take out stop words from business desc
 		txt_lemmatized = lemmatization(removed_stop_words) # lemmatize and only keep nouns
 		dict_terms = Counter(txt_lemmatized) # create dictionary from terms 
 
 		ret_dict[ticker] = dict_terms # nested dict of tickers and keywords 
 		print("FINISHED LOADING...", ticker)
 
-	pickle.dump(ret_dict, open("stockData.p", "wb"))
+	######################## TEST ###################################
+	try:
+		# Get a file object with write permission.
+		file_object = open('./TESTJSON.json', 'w')
+
+		# Save dict data into the JSON file.
+		json.dump(ret_dict, file_object)
+
+		print(" created. ")    
+	except FileNotFoundError:
+		print(" not found. ")  
+
+	#################################################################
+	# pickle.dump(ret_dict, open("stockData.p", "wb")) ########## COMMENTED OUT FOR NOW ####################
 	print("TOTAL ERRORS: ", error_count, "ERROR %: ", error_count/len(tickers))
 
+# take all available stock tickers and return the covariance 
+# NEED TO RUN update_sp500_tickers() beforehand
+def get_stock_COV():
+	tickers = load_tickers('sp500.csv')
+	tickers.append('SPY') # used for comparison, SPDR market 
+	
+	coefficient_of_variations = []
+	errors = []
+	for ticker in tickers:
+		past_year_prices = []
+		url = ("https://financialmodelingprep.com/api/v3/historical-price-full/"+ticker+"?timeseries=365")
+		response = urlopen(url)
+		data = response.read().decode("utf-8")
+		json_data = json.loads(data)
+		try:
+			print("CALCULATING COV FOR: ", ticker)
+			for day_price in json_data['historical']:
+				past_year_prices.append(day_price['close'])
+		except:
+			print("ISSUE WITH: ",ticker)
+			errors.append(ticker)
+			continue
+
+		coefficient_of_variations.append([ticker, variation(past_year_prices)])	
+
+	print(errors)
+	print(coefficient_of_variations)
+	pickle.dump(coefficient_of_variations, open("COV.p", "wb"))
+
+def test():
+	cov = pickle.load( open( "COV.p", "rb" ) )
+	print(cov)
+
+# test()
+# get_stock_COV()
+update_stock_data_dict()
 
 # TODO 
 # front end 
 # place more financial stop words 
 # find out why the 20% not working (incl. DIS)
-# add nasdaq to total stocks
